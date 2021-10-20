@@ -126,7 +126,7 @@ if __name__ == "__main__":
     cfg.SOLVER.STEPS = []        # do not decay learning rate
     cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 128   # faster, and good enough for this toy dataset (default: 512)
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 1  # only has one class (ballon). (see https://detectron2.readthedocs.io/tutorials/datasets.
-    cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES = 1 #sets the number of stuff classes for Semantic FPN & Panoptic FPN.
+    #cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES = 2 #sets the number of stuff classes for Semantic FPN & Panoptic FPN.
 
     cfg.OUTPUT_DIR='./output/panotic3/'
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)#./output

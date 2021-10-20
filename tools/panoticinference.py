@@ -83,6 +83,29 @@ def cv2_imshow(img, outputfilename='./outputs/result.png'):
     plt.imshow(rgb)
     fig.savefig(outputfilename)
 
+from detectron2.utils.visualizer import (
+    ColorMode,
+    Visualizer,
+    _create_text_labels,
+    _PanopticPrediction,)
+
+def testpanotic(panoptic_seg, segments_info, balloon_metadata):
+    pred = _PanopticPrediction(panoptic_seg.to("cpu"), segments_info, balloon_metadata)
+    for mask, sinfo in pred.semantic_masks():
+        category_idx = sinfo["category_id"]
+        try:
+            mask_color = [x / 255 for x in balloon_metadata.stuff_colors[category_idx]]
+        except AttributeError:
+            mask_color = None
+
+        v.draw_binary_mask(
+            mask,
+            color=mask_color,
+            text=balloon_metadata.stuff_classes[category_idx]
+        )
+
+    all_instances = list(pred.instance_masks())
+
 if __name__ == "__main__":
     # Inference should use the config with parameters that are used in training
     # cfg now already contains everything we've set previously. We changed it a little bit for inference:
@@ -99,7 +122,7 @@ if __name__ == "__main__":
     for d in ["train", "val"]:
         DatasetCatalog.register("balloon_" + d, lambda d=d: get_balloon_dicts("./Dataset/balloon/" + d))
         # For semantic / panoptic segmentation, add a stuff class.
-        MetadataCatalog.get("balloon_" + d).set(thing_classes=["balloon"], stuff_classes=["background"])
+        MetadataCatalog.get("balloon_" + d).set(thing_classes=["balloon"], stuff_classes=["background0","background1"])
     balloon_metadata = MetadataCatalog.get("balloon_train")
 
     #inference
@@ -111,13 +134,16 @@ if __name__ == "__main__":
     predictor = DefaultPredictor(cfg)
     panoptic_seg, segments_info = predictor(rgb)["panoptic_seg"]
     v = Visualizer(rgb[:, :, ::-1], balloon_metadata, scale=1.2)
+    testpanotic(panoptic_seg, segments_info, balloon_metadata)
     out = v.draw_panoptic_seg_predictions(panoptic_seg.to("cpu"), segments_info)
     cv2_imshow(out.get_image()[:, :, ::-1],'./outputs/panoptic_inference.jpg')
+    
 
     for d in random.sample(dataset_dicts, 3):    
         im = cv2.imread(d["file_name"])
         panoptic_seg, segments_info = predictor(im)["panoptic_seg"]
         v = Visualizer(im[:, :, ::-1], balloon_metadata, scale=1.2)
+        testpanotic(panoptic_seg, segments_info, balloon_metadata)
         out = v.draw_panoptic_seg_predictions(panoptic_seg.to("cpu"), segments_info)
         cv2_imshow(out.get_image()[:, :, ::-1],'./outputs/'+str(d["image_id"]))
     
