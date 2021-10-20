@@ -93,8 +93,10 @@ if __name__ == "__main__":
     cfg.merge_from_file(model_zoo.get_config_file("COCO-PanopticSegmentation/panoptic_fpn_R_101_3x.yaml"))
     cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("COCO-PanopticSegmentation/panoptic_fpn_R_101_3x.yaml")
     predictor = DefaultPredictor(cfg)
-    panoptic_seg, segments_info = predictor(rgb)["panoptic_seg"]
-    v = Visualizer(rgb[:, :, ::-1], MetadataCatalog.get(cfg.DATASETS.TRAIN[0]), scale=1.2)
+    result=predictor(rgb)#three keys: sem_seg, instances, panoptic_seg
+    panoptic_seg, segments_info = result["panoptic_seg"]
+    metadata=MetadataCatalog.get(cfg.DATASETS.TRAIN[0])#TRAIN[0]:coco_2017_train_panoptic_separated, metadata=evaluator_type:'coco_panoptic_seg'
+    v = Visualizer(rgb[:, :, ::-1], metadata, scale=1.2)
     out = v.draw_panoptic_seg_predictions(panoptic_seg.to("cpu"), segments_info)
     cv2_imshow(out.get_image()[:, :, ::-1],'./outputs/panoptic.jpg')
 
@@ -102,6 +104,13 @@ if __name__ == "__main__":
         DatasetCatalog.register("balloon_" + d, lambda d=d: get_balloon_dicts("./Dataset/balloon/" + d))
         # For semantic / panoptic segmentation, add a stuff class.
         MetadataCatalog.get("balloon_" + d).set(thing_classes=["balloon"], stuff_classes=["background"])
+    #balloon_metadata = MetadataCatalog.get("balloon_train")
+
+    MetadataCatalog.get("balloon_train").thing_classes=["balloon"]
+    MetadataCatalog.get("balloon_train").stuff_classes=["background"]
+    ##registering again as have modified the dicts obatained from the COCO format , added the segmenattion info
+    #DatasetCatalog.register("balloon_train", lambda d=d:get_balloon_dicts("./Dataset/balloon/train"))
+
     balloon_metadata = MetadataCatalog.get("balloon_train")
 
     #Training
@@ -117,8 +126,9 @@ if __name__ == "__main__":
     cfg.SOLVER.STEPS = []        # do not decay learning rate
     cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 128   # faster, and good enough for this toy dataset (default: 512)
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 1  # only has one class (ballon). (see https://detectron2.readthedocs.io/tutorials/datasets.
+    cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES = 1 #sets the number of stuff classes for Semantic FPN & Panoptic FPN.
 
-    cfg.OUTPUT_DIR='./output/panotic2/'
+    cfg.OUTPUT_DIR='./output/panotic3/'
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)#./output
     trainer = DefaultTrainer(cfg) 
     trainer.resume_or_load(resume=False)
