@@ -73,6 +73,7 @@ def separate_coco_semantic_from_panoptic(panoptic_json, panoptic_root, sem_seg_r
 
 
 if __name__ == "__main__":
+    #created image folders of panoptic_stuff_train2017 and panoptic_stuff_val2017 in the coco folder
     dataset_dir = os.path.join("/DATA5T2/Datasets/COCO2017/", "coco")
     for s in ["val2017", "train2017"]:
         separate_coco_semantic_from_panoptic(
