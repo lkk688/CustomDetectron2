@@ -37,6 +37,12 @@ from detectron2.engine import DefaultTrainer
 # import numpy as np
 # import cv2
 
+panoptic_coco_categories = './Detectron2COCOPanoptic/panoptic_coco_categories.json'
+with open(panoptic_coco_categories, 'r') as f:
+    categories_list = json.load(f)
+COCO_CATEGORIES =categories_list# {category['id']: category for category in categories_list}
+
+
 from pycocotools.coco import COCO
 def generate_segmentation_file(img_dir, outputpath):
     json_file = os.path.join(img_dir, "FireClassification.json")
@@ -66,10 +72,10 @@ def cv2_imshow(img, outputfilename='./outputs/result.png'):
     plt.imshow(rgb)
     fig.savefig(outputfilename)
 
-def init_cfg(config_file: str):
+def init_cfg(config_file: str, datasettrain):
     cfg = get_cfg()
     cfg.merge_from_file(model_zoo.get_config_file(config_file))
-    cfg.DATASETS.TRAIN = ("firedataset_train_new",)
+    cfg.DATASETS.TRAIN = (datasettrain,)
     cfg.DATASETS.TEST = ()
     cfg.DATALOADER.NUM_WORKERS = 2
     cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url(config_file)  # Let training initialize from model zoo
@@ -139,45 +145,153 @@ def load_coco_panoptic_json(json_file, image_dir, gt_dir, meta):
     assert PathManager.isfile(ret[0]["pan_seg_file_name"]), ret[0]["pan_seg_file_name"]
     return ret
 
-from detectron2.data.datasets import register_coco_instances, load_coco_json
+
+def _get_coco_panoptic_separated_meta():
+    """
+    Returns metadata for "separated" version of the panoptic segmentation dataset.
+    """
+    stuff_ids = [k["id"] for k in COCO_CATEGORIES if k["isthing"] == 0]
+    assert len(stuff_ids) == 53, len(stuff_ids)
+
+    # For semantic segmentation, this mapping maps from contiguous stuff id
+    # (in [0, 53], used in models) to ids in the dataset (used for processing results)
+    # The id 0 is mapped to an extra category "thing".
+    stuff_dataset_id_to_contiguous_id = {k: i + 1 for i, k in enumerate(stuff_ids)}
+    # When converting COCO panoptic annotations to semantic annotations
+    # We label the "thing" category to 0
+    stuff_dataset_id_to_contiguous_id[0] = 0
+
+    # 54 names for COCO stuff categories (including "things")
+    stuff_classes = ["things"] + [
+        k["name"].replace("-other", "").replace("-merged", "")
+        for k in COCO_CATEGORIES
+        if k["isthing"] == 0
+    ]
+
+    # NOTE: I randomly picked a color for things
+    stuff_colors = [[82, 18, 128]] + [k["color"] for k in COCO_CATEGORIES if k["isthing"] == 0]
+    ret = {
+        "stuff_dataset_id_to_contiguous_id": stuff_dataset_id_to_contiguous_id,
+        "stuff_classes": stuff_classes,
+        "stuff_colors": stuff_colors,
+    }
+    ret.update(_get_coco_instances_meta())
+    return ret
+
+def _get_coco_instances_meta():
+    thing_ids = [k["id"] for k in COCO_CATEGORIES if k["isthing"] == 1]
+    thing_colors = [k["color"] for k in COCO_CATEGORIES if k["isthing"] == 1]
+    assert len(thing_ids) == 80, len(thing_ids)
+    # Mapping from the incontiguous COCO category id to an id in [0, 79]
+    thing_dataset_id_to_contiguous_id = {k: i for i, k in enumerate(thing_ids)}
+    thing_classes = [k["name"] for k in COCO_CATEGORIES if k["isthing"] == 1]
+    ret = {
+        "thing_dataset_id_to_contiguous_id": thing_dataset_id_to_contiguous_id,
+        "thing_classes": thing_classes,
+        "thing_colors": thing_colors,
+    }
+    return ret
+
+from detectron2.data.datasets import register_coco_instances, load_coco_json, register_coco_panoptic_separated, load_sem_seg
+#from detectron2.data.datasets import _get_builtin_metadata
 from PIL import Image
+import copy
+
+def merge_to_panoptic(detection_dicts, sem_seg_dicts):
+    """
+    Create dataset dicts for panoptic segmentation, by
+    merging two dicts using "file_name" field to match their entries.
+    Args:
+        detection_dicts (list[dict]): lists of dicts for object detection or instance segmentation.
+        sem_seg_dicts (list[dict]): lists of dicts for semantic segmentation.
+    Returns:
+        list[dict] (one per input image): Each dict contains all (key, value) pairs from dicts in
+            both detection_dicts and sem_seg_dicts that correspond to the same image.
+            The function assumes that the same key in different dicts has the same value.
+    """
+    results = []
+    sem_seg_file_to_entry = {x["file_name"]: x for x in sem_seg_dicts}
+    assert len(sem_seg_file_to_entry) > 0
+
+    for det_dict in detection_dicts:
+        dic = copy.copy(det_dict)
+        dic.update(sem_seg_file_to_entry[dic["file_name"]])
+        results.append(dic)
+    return results
+
 if __name__ == "__main__":
-    meta = MetadataCatalog.get("coco_2017_train_panoptic") #"coco_2017_train_panoptic"
-    dicts=load_coco_panoptic_json('/DATA5T2/Datasets/COCO2017/coco/annotations/panoptic_train2017.json', '/DATA5T2/Datasets/COCO2017/coco/images/train2017/', '/DATA5T2/Datasets/COCO2017/coco/annotations/panoptic_train2017/', meta)
+    metalist=MetadataCatalog.list()
+
+    panoptic_name="coco_2017_train_panoptic_separated"#"coco_2017_train_panoptic"
+    image_root='/DATA5T2/Datasets/COCO2017/coco/images/train2017/'
+    panoptic_root='/DATA5T2/Datasets/COCO2017/coco/annotations/panoptic_train2017/' #directory which contains panoptic annotation images
+    panoptic_json='/DATA5T2/Datasets/COCO2017/coco/annotations/panoptic_train2017.json'
+    sem_seg_root= '/DATA5T2/Datasets/COCO2017/coco/panoptic_stuff_train2017/'#directory which contains all the ground truth segmentation annotations.
+    instances_json='/DATA5T2/Datasets/COCO2017/coco/annotations/instances_train2017.json'
+    
+    # MetadataCatalog.get(panoptic_name).set(
+    #     panoptic_root=panoptic_root,
+    #     image_root=image_root,
+    #     panoptic_json=panoptic_json,
+    #     sem_seg_root=sem_seg_root,
+    #     json_file=instances_json,  # TODO rename
+    #     evaluator_type="coco_panoptic_seg",
+    #     ignore_label=255,
+    # )
+    meta = MetadataCatalog.get(panoptic_name) #"coco_2017_train_panoptic"
+        
+    mypanoptic_name='mycoco_2017_train_panoptic'
+    mymeta=_get_coco_panoptic_separated_meta()
+    DatasetCatalog.register(
+        mypanoptic_name,
+        lambda: merge_to_panoptic(
+            load_coco_json(instances_json, image_root, panoptic_name),
+            load_sem_seg(sem_seg_root, image_root),
+        ),
+    )
+    MetadataCatalog.get(mypanoptic_name).set(
+        panoptic_root=panoptic_root,
+        image_root=image_root,
+        panoptic_json=panoptic_json,
+        sem_seg_root=sem_seg_root,
+        json_file=instances_json,  # TODO rename
+        evaluator_type="coco_panoptic_seg",
+        ignore_label=255,
+        **mymeta,
+    )
+    #register_coco_panoptic_separated('mycoco_2017_train_panoptic', mymeta, image_root, panoptic_root, panoptic_json, sem_seg_root, instances_json)
+    metalist=MetadataCatalog.list()
+    mymeta = MetadataCatalog.get(mypanoptic_name)
+
+    #Visualize a few images
+    dataset_dicts = DatasetCatalog.get(mypanoptic_name)
+    for d in random.sample(dataset_dicts, 3):
+        img = cv2.imread(d["file_name"])
+        visualizer = Visualizer(img[:, :, ::-1], metadata=mymeta, scale=0.5)
+        vis = visualizer.draw_dataset_dict(d)
+        cv2_imshow(vis.get_image()[:, :, ::-1],'./outputs/'+str(d["image_id"]))
+
+    #dicts=load_coco_panoptic_json('/DATA5T2/Datasets/COCO2017/coco/annotations/panoptic_train2017.json', '/DATA5T2/Datasets/COCO2017/coco/images/train2017/', '/DATA5T2/Datasets/COCO2017/coco/annotations/panoptic_train2017/', meta)#len: 118287
 
     #dicts = load_coco_json('/DATA5T2/Datasets/COCO2017/coco/annotations/panoptic_train2017.json', '/DATA5T2/Datasets/COCO2017/coco/images/train2017/', 'coco_2017_train_panoptic') #path/to/json path/to/image_root dataset_name
     #dicts = load_coco_json('/DATA5T2/Datasets/COCO2017/coco/annotations/instances_train2017.json', '/DATA5T2/Datasets/COCO2017/coco/images/train2017/', 'coco_2017_train') #path/to/json path/to/image_root dataset_name
 
-    dirname='./outputs/'
-    for d in dicts:
-        img = np.array(Image.open(d["file_name"]))
-        visualizer = Visualizer(img, metadata=meta)
-        vis = visualizer.draw_dataset_dict(d)
-        fpath = os.path.join(dirname, os.path.basename(d["file_name"]))
-        vis.save(fpath)
-
-    d='train'
-    DatasetCatalog.register("mycoco_2017_train_panoptic", lambda d=d:load_coco_panoptic_json('/DATA5T2/Datasets/COCO2017/coco/annotations/panoptic_train2017.json', '/DATA5T2/Datasets/COCO2017/coco/images/train2017/', '/DATA5T2/Datasets/COCO2017/coco/annotations/panoptic_train2017/', dataset_metadata))
-    
-    #if your dataset is in COCO format, this cell can be replaced by the following three lines:
-    # from detectron2.data.datasets import register_coco_panoptic, register_coco_instances
-    # #name, metadata, image_root, panoptic_root, panoptic_json, sem_seg_root, instances_json
-    # register_coco_panoptic("mycoco_2017_train_panoptic", {}, '/DATA5T2/Datasets/COCO2017/coco/images/', '/DATA5T2/Datasets/COCO2017/coco/annotations/panoptic_train2017/', '/DATA5T2/Datasets/COCO2017/coco/annotations/panoptic_train2017.json')
-    dataset_dicts = DatasetCatalog.get("mycoco_2017_train_panoptic")
 
     
-
-    dataset_metadata = MetadataCatalog.get("mycoco_2017_train_panoptic")
-    # Check whether dataset is correctly initialised
-    #visualise_dataset("train")
-    #dataset_dicts = get_balloon_dicts(os.path.join("balloon", d))
-    for d in random.sample(dataset_dicts, 3):
-        img = cv2.imread(d["file_name"])
-        visualizer = Visualizer(img[:, :, ::-1], metadata=dataset_metadata, scale=0.5)
-        vis = visualizer.draw_dataset_dict(d) #pip install git+https://github.com/cocodataset/panopticapi.git
-        cv2_imshow(vis.get_image()[:, :, ::-1],'./outputs/'+str(d["image_id"]))
-    
-    cfg = init_cfg("COCO-PanopticSegmentation/panoptic_fpn_R_50_3x.yaml")
+    #cfg = init_cfg("COCO-PanopticSegmentation/panoptic_fpn_R_50_3x.yaml", mypanoptic_name)
+    cfg = get_cfg()
+    config_file="COCO-PanopticSegmentation/panoptic_fpn_R_50_3x.yaml"
+    cfg.merge_from_file(model_zoo.get_config_file(config_file))
+    cfg.DATASETS.TRAIN = (mypanoptic_name,)
+    cfg.DATASETS.TEST = ()
+    cfg.DATALOADER.NUM_WORKERS = 2
+    cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url(config_file)  # Let training initialize from model zoo
+    cfg.SOLVER.IMS_PER_BATCH = 2
+    cfg.SOLVER.BASE_LR = 0.00025  # pick a good LR
+    cfg.SOLVER.MAX_ITER = 500  # 300 iterations seems good enough for this toy dataset; you may need to train longer for a practical dataset
+    cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 128  # faster, and good enough for this toy dataset (default: 512)
+    #cfg.MODEL.ROI_HEADS.NUM_CLASSES = 4  # only has one class (ballon)
+    print(cfg.MODEL.ROI_HEADS.NUM_CLASSES)#80
     cfg.OUTPUT_DIR='./output/cocopanoptic'
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
     trainer = DefaultTrainer(cfg)
@@ -185,7 +299,7 @@ if __name__ == "__main__":
     trainer.train()
 
     predictor = get_predictor(cfg, "model_final.pth")
-    inputs = cv2.imread('./Dataset/CMPE_295_All_images/Images/ChoppervideoCameronPeakFirestartsnearChambersLakeinwesternLarimerCounty-223.jpg')
+    inputs = cv2.imread('./Dataset/input.jpg')
     panoptic_seg, segments_info = predictor(inputs)["panoptic_seg"]
 
     print("segments_info")
