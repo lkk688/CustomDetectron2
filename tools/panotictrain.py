@@ -55,7 +55,7 @@ def get_balloon_dicts(img_dir):
         record["height"] = height
         record["width"] = width
         # Pixel-wise segmentation
-        record["sem_seg_file_name"] = os.path.join(img_dir, "segmentation", v["filename"])
+        record["sem_seg_file_name"] = os.path.join(img_dir, "segmentation", v["filename"])#
 
         annos = v["regions"]
         objs = []
@@ -106,12 +106,13 @@ if __name__ == "__main__":
         MetadataCatalog.get("balloon_" + d).set(thing_classes=["balloon"], stuff_classes=["background"])
     #balloon_metadata = MetadataCatalog.get("balloon_train")
 
-    MetadataCatalog.get("balloon_train").thing_classes=["balloon"]
-    MetadataCatalog.get("balloon_train").stuff_classes=["background"]
+    DatasetCatalog.register("balloon_train_new", lambda d=d:get_balloon_dicts("./Dataset/balloon/train"))
+    MetadataCatalog.get("balloon_train_new").thing_classes=["balloon"]
+    MetadataCatalog.get("balloon_train_new").stuff_classes=["background"]
     ##registering again as have modified the dicts obatained from the COCO format , added the segmenattion info
     #DatasetCatalog.register("balloon_train", lambda d=d:get_balloon_dicts("./Dataset/balloon/train"))
 
-    balloon_metadata = MetadataCatalog.get("balloon_train")
+    balloon_metadata = MetadataCatalog.get("balloon_train_new")
 
     #Training
     cfg = get_cfg()
