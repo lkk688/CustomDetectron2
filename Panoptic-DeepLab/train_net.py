@@ -139,15 +139,240 @@ def setup(args):
     """
     cfg = get_cfg()
     add_panoptic_deeplab_config(cfg)
-    cfg.merge_from_file(args.config_file)
-    cfg.merge_from_list(args.opts)
+
+    config_file="./Panoptic-DeepLab/configs/COCO-PanopticSegmentation/panoptic_deeplab_R_52_os16_mg124_poly_200k_bs64_crop_640_640_coco_dsconv.yaml"
+    cfg.merge_from_file(config_file)
+    #cfg.merge_from_file(args.config_file)
+    #cfg.merge_from_list(args.opts)
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
 
+from detectron2.data.datasets import register_coco_instances, load_coco_json, register_coco_panoptic_separated, load_sem_seg
+#from detectron2.data.datasets import _get_builtin_metadata
+from detectron2.data import MetadataCatalog, DatasetCatalog
+from detectron2.utils.visualizer import Visualizer
+from PIL import Image
+import copy
+import numpy as np
+import os, json, cv2, random
+from matplotlib import pyplot as plt
+
+from detectron2.utils.file_io import PathManager
+def load_coco_panoptic_json(json_file, image_dir, gt_dir, meta):
+    """
+    Args:
+        image_dir (str): path to the raw dataset. e.g., "~/coco/train2017".
+        gt_dir (str): path to the raw annotations. e.g., "~/coco/panoptic_train2017".
+        json_file (str): path to the json file. e.g., "~/coco/annotations/panoptic_train2017.json".
+    Returns:
+        list[dict]: a list of dicts in Detectron2 standard format. (See
+        `Using Custom Datasets </tutorials/datasets.html>`_ )
+    """
+
+    def _convert_category_id(segment_info, meta):
+        if segment_info["category_id"] in meta["thing_dataset_id_to_contiguous_id"]:
+            segment_info["category_id"] = meta["thing_dataset_id_to_contiguous_id"][
+                segment_info["category_id"]
+            ]
+            segment_info["isthing"] = True
+        else:
+            segment_info["category_id"] = meta["stuff_dataset_id_to_contiguous_id"][
+                segment_info["category_id"]
+            ]
+            segment_info["isthing"] = False
+        return segment_info
+
+    with PathManager.open(json_file) as f:
+        json_info = json.load(f)
+
+    ret = []
+    for ann in json_info["annotations"]:
+        image_id = int(ann["image_id"])
+        # TODO: currently we assume image and label has the same filename but
+        # different extension, and images have extension ".jpg" for COCO. Need
+        # to make image extension a user-provided argument if we extend this
+        # function to support other COCO-like datasets.
+        image_file = os.path.join(image_dir, os.path.splitext(ann["file_name"])[0] + ".jpg")
+        label_file = os.path.join(gt_dir, ann["file_name"])
+        segments_info = [_convert_category_id(x, meta) for x in ann["segments_info"]]
+        #segments_info = [x for x in ann["segments_info"]]
+        ret.append(
+            {
+                "file_name": image_file,
+                "image_id": image_id,
+                "pan_seg_file_name": label_file,
+                "segments_info": segments_info,
+            }
+        )
+    assert len(ret), f"No images found in {image_dir}!"
+    assert PathManager.isfile(ret[0]["file_name"]), ret[0]["file_name"]
+    assert PathManager.isfile(ret[0]["pan_seg_file_name"]), ret[0]["pan_seg_file_name"]
+    return ret
+
+panoptic_coco_categories = './Detectron2COCOPanoptic/panoptic_coco_categories.json'
+with open(panoptic_coco_categories, 'r') as f:
+    categories_list = json.load(f)
+COCO_CATEGORIES =categories_list# {category['id']: category for category in categories_list}
+
+def cv2_imshow(img, outputfilename='./outputs/result.png'):
+    rgb=cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    fig = plt.figure(figsize = (20, 10))
+    plt.imshow(rgb)
+    fig.savefig(outputfilename)
+
+
+def get_coco_panoptic_standard():
+    meta = {}
+    # The following metadata maps contiguous id from [0, #thing categories +
+    # #stuff categories) to their names and colors. We have to replica of the
+    # same name and color under "thing_*" and "stuff_*" because the current
+    # visualization function in D2 handles thing and class classes differently
+    # due to some heuristic used in Panoptic FPN. We keep the same naming to
+    # enable reusing existing visualization functions.
+    thing_classes = [k["name"] for k in COCO_CATEGORIES]
+    thing_colors = [k["color"] for k in COCO_CATEGORIES]
+    stuff_classes = [k["name"] for k in COCO_CATEGORIES]
+    stuff_colors = [k["color"] for k in COCO_CATEGORIES]
+
+    meta["thing_classes"] = thing_classes
+    meta["thing_colors"] = thing_colors
+    meta["stuff_classes"] = stuff_classes
+    meta["stuff_colors"] = stuff_colors
+
+    # Convert category id for training:
+    #   category id: like semantic segmentation, it is the class id for each
+    #   pixel. Since there are some classes not used in evaluation, the category
+    #   id is not always contiguous and thus we have two set of category ids:
+    #       - original category id: category id in the original dataset, mainly
+    #           used for evaluation.
+    #       - contiguous category id: [0, #classes), in order to train the linear
+    #           softmax classifier.
+    thing_dataset_id_to_contiguous_id = {}
+    stuff_dataset_id_to_contiguous_id = {}
+
+    for i, cat in enumerate(COCO_CATEGORIES):
+        if cat["isthing"]:
+            thing_dataset_id_to_contiguous_id[cat["id"]] = i
+        else:
+            stuff_dataset_id_to_contiguous_id[cat["id"]] = i
+
+    meta["thing_dataset_id_to_contiguous_id"] = thing_dataset_id_to_contiguous_id
+    meta["stuff_dataset_id_to_contiguous_id"] = stuff_dataset_id_to_contiguous_id
+
+    return meta
+
+def _get_coco_panoptic_separated_meta():
+    """
+    Returns metadata for "separated" version of the panoptic segmentation dataset.
+    """
+    stuff_ids = [k["id"] for k in COCO_CATEGORIES if k["isthing"] == 0]
+    assert len(stuff_ids) == 53, len(stuff_ids)
+
+    # For semantic segmentation, this mapping maps from contiguous stuff id
+    # (in [0, 53], used in models) to ids in the dataset (used for processing results)
+    # The id 0 is mapped to an extra category "thing".
+    stuff_dataset_id_to_contiguous_id = {k: i + 1 for i, k in enumerate(stuff_ids)}
+    # When converting COCO panoptic annotations to semantic annotations
+    # We label the "thing" category to 0
+    stuff_dataset_id_to_contiguous_id[0] = 0
+
+    # 54 names for COCO stuff categories (including "things")
+    stuff_classes = ["things"] + [
+        k["name"].replace("-other", "").replace("-merged", "")
+        for k in COCO_CATEGORIES
+        if k["isthing"] == 0
+    ]
+
+    # NOTE: I randomly picked a color for things
+    stuff_colors = [[82, 18, 128]] + [k["color"] for k in COCO_CATEGORIES if k["isthing"] == 0]
+    ret = {
+        "stuff_dataset_id_to_contiguous_id": stuff_dataset_id_to_contiguous_id,
+        "stuff_classes": stuff_classes,
+        "stuff_colors": stuff_colors,
+    }
+    ret.update(_get_coco_instances_meta())
+    return ret
+
+def _get_coco_instances_meta():
+    thing_ids = [k["id"] for k in COCO_CATEGORIES if k["isthing"] == 1]
+    thing_colors = [k["color"] for k in COCO_CATEGORIES if k["isthing"] == 1]
+    assert len(thing_ids) == 80, len(thing_ids)
+    # Mapping from the incontiguous COCO category id to an id in [0, 79]
+    thing_dataset_id_to_contiguous_id = {k: i for i, k in enumerate(thing_ids)}
+    thing_classes = [k["name"] for k in COCO_CATEGORIES if k["isthing"] == 1]
+    ret = {
+        "thing_dataset_id_to_contiguous_id": thing_dataset_id_to_contiguous_id,
+        "thing_classes": thing_classes,
+        "thing_colors": thing_colors,
+    }
+    return ret
+
+def merge_to_panoptic(detection_dicts, sem_seg_dicts):
+    """
+    Create dataset dicts for panoptic segmentation, by
+    merging two dicts using "file_name" field to match their entries.
+    Args:
+        detection_dicts (list[dict]): lists of dicts for object detection or instance segmentation.
+        sem_seg_dicts (list[dict]): lists of dicts for semantic segmentation.
+    Returns:
+        list[dict] (one per input image): Each dict contains all (key, value) pairs from dicts in
+            both detection_dicts and sem_seg_dicts that correspond to the same image.
+            The function assumes that the same key in different dicts has the same value.
+    """
+    results = []
+    sem_seg_file_to_entry = {x["file_name"]: x for x in sem_seg_dicts}
+    assert len(sem_seg_file_to_entry) > 0
+
+    for det_dict in detection_dicts:
+        dic = copy.copy(det_dict)
+        dic.update(sem_seg_file_to_entry[dic["file_name"]])
+        results.append(dic)
+    return results
 
 def main(args):
     cfg = setup(args)
+
+    metalist=MetadataCatalog.list()
+
+    panoptic_name="coco_2017_train_panoptic"#"coco_2017_train_panoptic_separated"#"coco_2017_train_panoptic"
+    image_root='/DATA5T2/Datasets/COCO2017/coco/images/train2017/'
+    panoptic_root='/DATA5T2/Datasets/COCO2017/coco/annotations/panoptic_train2017/' #directory which contains panoptic annotation images
+    panoptic_json='/DATA5T2/Datasets/COCO2017/coco/annotations/panoptic_train2017.json'
+    sem_seg_root= '/DATA5T2/Datasets/COCO2017/coco/panoptic_stuff_train2017/'#directory which contains all the ground truth segmentation annotations.
+    instances_json='/DATA5T2/Datasets/COCO2017/coco/annotations/instances_train2017.json'
+    
+    meta = MetadataCatalog.get(panoptic_name) #"coco_2017_train_panoptic"
+        
+    mypanoptic_name='mycoco_2017_train_panoptic'
+    mymeta=get_coco_panoptic_standard()#_get_coco_panoptic_separated_meta()
+    print(mymeta["thing_dataset_id_to_contiguous_id"])
+    #ref to register_coco_panoptic in https://github.com/facebookresearch/detectron2/blob/main/detectron2/data/datasets/coco_panoptic.py
+    DatasetCatalog.register(
+        mypanoptic_name,
+        lambda: load_coco_panoptic_json(panoptic_json, image_root, panoptic_root, mymeta),
+    )
+    MetadataCatalog.get(mypanoptic_name).set(
+        panoptic_root=panoptic_root,
+        image_root=image_root,
+        panoptic_json=panoptic_json,
+        json_file=instances_json,
+        evaluator_type="coco_panoptic_seg",
+        ignore_label=255,
+        label_divisor=1000,
+        **mymeta,
+    )
+
+    metalist=MetadataCatalog.list()
+    mymetadataCatalog = MetadataCatalog.get(mypanoptic_name)
+
+    #Visualize a few images
+    dataset_dicts = DatasetCatalog.get(mypanoptic_name)
+    for d in random.sample(dataset_dicts, 3):
+        img = cv2.imread(d["file_name"])
+        visualizer = Visualizer(img[:, :, ::-1], metadata=mymetadataCatalog, scale=0.5)
+        vis = visualizer.draw_dataset_dict(d)
+        cv2_imshow(vis.get_image()[:, :, ::-1],'./outputs/panopticdeeplab'+str(d["image_id"]))
 
     if args.eval_only:
         model = Trainer.build_model(cfg)
@@ -157,19 +382,46 @@ def main(args):
         res = Trainer.test(cfg, model)
         return res
 
+    #cfg.OUTPUT_DIR='./output/cocopanopticdeeplab'
+    #os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
     trainer = Trainer(cfg)
     trainer.resume_or_load(resume=args.resume)
     return trainer.train()
 
-
+import argparse
 if __name__ == "__main__":
+    #cd /path/to/detectron2/projects/Panoptic-DeepLab
+#python train_net.py --config-file configs/Cityscapes-PanopticSegmentation/panoptic_deeplab_R_52_os16_mg124_poly_90k_bs32_crop_512_1024_dsconv.yaml --num-gpus 8
+
     args = default_argument_parser().parse_args()
+    # parser = argparse.ArgumentParser(description='PyTorch Distributed Training')
+    # parser.add_argument("--config-file", default="", metavar="FILE", help="path to config file")
+    # parser.add_argument(
+    #     "--resume",
+    #     action="store_true",
+    #     help="Whether to attempt to resume from the checkpoint directory. "
+    #     "See documentation of `DefaultTrainer.resume_or_load()` for what it means.",
+    # )
+    # parser.add_argument("--eval-only", action="store_true", help="perform evaluation only")
+    # parser.add_argument("--num-gpus", type=int, default=1, help="number of gpus *per machine*")
+    # args = parser.parse_args()
+
+    print(args)
+    #args.config_file="/Panoptic-DeepLab/configs/COCO-PanopticSegmentation/panoptic_deeplab_R_52_os16_mg124_poly_200k_bs64_crop_640_640_coco_dsconv.yaml"
+    args.config_file="./Panoptic-DeepLab/configs/COCO-PanopticSegmentation/panoptic_deeplab_R_52_os16_mg124_poly_200k_bs64_crop_640_640_coco_dsconv.yaml"
     print("Command Line Args:", args)
+
+    # import torch.distributed as dist
+    # dist.init_process_group('gloo', init_method="env://", rank=0, world_size=1)
+    # dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
+    #                             world_size=args.world_size, rank=args.rank)
+
+    #main(args)
     launch(
         main,
         args.num_gpus,
-        num_machines=args.num_machines,
-        machine_rank=args.machine_rank,
+        num_machines=args.num_machines,#1
+        machine_rank=args.machine_rank,#0
         dist_url=args.dist_url,
         args=(args,),
     )

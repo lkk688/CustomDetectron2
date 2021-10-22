@@ -7,7 +7,7 @@ MODEL:
     NAME: "build_resnet_deeplab_backbone"
   RESNETS:
     DEPTH: 50
-    NORM: "SyncBN"
+    NORM: "BN"
     RES5_MULTI_GRID: [1, 2, 4]
     STEM_TYPE: "deeplab"
     STEM_OUT_CHANNELS: 128
@@ -22,12 +22,12 @@ MODEL:
     SIZE_DIVISIBILITY: 640
     USE_DEPTHWISE_SEPARABLE_CONV: True
 DATASETS:
-  TRAIN: ("coco_2017_train_panoptic",)
+  TRAIN: ("mycoco_2017_train_panoptic",)
   TEST: ("coco_2017_val_panoptic",)
 SOLVER:
   BASE_LR: 0.0005
   MAX_ITER: 200000
-  IMS_PER_BATCH: 64
+  IMS_PER_BATCH: 4
 INPUT:
   FORMAT: "RGB"
   GAUSSIAN_SIGMA: 8
