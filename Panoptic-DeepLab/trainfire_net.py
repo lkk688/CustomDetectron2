@@ -278,10 +278,10 @@ def main(args):
     panoptic_root='./Dataset/CMPE_295_All_images/train/segmentation/' #directory which contains panoptic annotation images
     panoptic_json='./Dataset/CMPE_295_All_images/Images/FireClassification.json'
     #sem_seg_root= '/DATA5T2/Datasets/COCO2017/coco/panoptic_stuff_train2017/'#directory which contains all the ground truth segmentation annotations.
-    instances_json='/DATA5T2/Datasets/COCO2017/coco/annotations/instances_train2017.json'
+    instances_json='./Dataset/CMPE_295_All_images/Fire_CMPE295-16.json'
     
         
-    mypanoptic_name='mycoco_2017_train_panoptic'
+    mypanoptic_name='fire_train_panoptic'
     mymeta=get_coco_panoptic_standard()#_get_coco_panoptic_separated_meta()
     print(mymeta["thing_dataset_id_to_contiguous_id"])
     #ref to register_coco_panoptic in https://github.com/facebookresearch/detectron2/blob/main/detectron2/data/datasets/coco_panoptic.py
