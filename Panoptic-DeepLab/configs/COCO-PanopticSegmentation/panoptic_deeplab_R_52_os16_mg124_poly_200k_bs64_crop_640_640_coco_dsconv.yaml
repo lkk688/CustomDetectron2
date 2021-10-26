@@ -23,7 +23,7 @@ MODEL:
     USE_DEPTHWISE_SEPARABLE_CONV: True
 DATASETS:
   TRAIN: ("mycoco_2017_train_panoptic",)
-  TEST: ("coco_2017_val_panoptic",)
+  TEST: ("mycoco_2017_val_panoptic",)
 SOLVER:
   BASE_LR: 0.0005
   MAX_ITER: 200000
