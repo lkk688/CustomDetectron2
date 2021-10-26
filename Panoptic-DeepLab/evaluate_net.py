@@ -390,9 +390,9 @@ def main(args):
         vis = visualizer.draw_dataset_dict(d)
         cv2_imshow(vis.get_image()[:, :, ::-1],'./outputs/panopticdeeplab'+str(d["image_id"]))
 
-    cfg.MODEL.WEIGHTS = './output/cocopanopticdeeplab/model_final.pth'
-    #cfg.MODEL.WEIGHTS = './outputs/panoticdeeplab_model_final.pkl'
-    cfg.OUTPUT_DIR='./output/cocopanopticdeeplab_pretrained'
+    #cfg.MODEL.WEIGHTS = './output/cocopanopticdeeplab/model_final.pth'
+    cfg.MODEL.WEIGHTS = './outputs/panoticdeeplab_model_final.pkl'
+    cfg.OUTPUT_DIR='./output/cocopanopticdeeplab_pretrained2'
     args.eval_only = True
     if args.eval_only:
         model = Trainer.build_model(cfg)
