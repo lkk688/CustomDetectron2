@@ -81,6 +81,8 @@ class Trainer(DefaultTrainer):
             dataset_name_mapper = {
                 "coco_2017_val_panoptic": "coco_2017_val",
                 "coco_2017_val_100_panoptic": "coco_2017_val_100",
+                "fire_val_panoptic": "fire_val",
+                "mycoco_2017_val_panoptic": "mycoco_2017_val",
             }
             evaluator_list.append(
                 COCOEvaluator(dataset_name_mapper[dataset_name], output_dir=output_folder)
@@ -140,11 +142,11 @@ def setup(args):
     cfg = get_cfg()
     add_panoptic_deeplab_config(cfg)
 
-    config_file="./Panoptic-DeepLab/configs/COCO-PanopticSegmentation/panoptic_deeplab_R_52_SyncBN.yaml"
-    cfg.merge_from_file(config_file)
+    #config_file="./Panoptic-DeepLab/configs/COCO-PanopticSegmentation/panoptic_deeplab_R_52_SyncBN.yaml"
+    cfg.merge_from_file(args.config_file)
     #cfg.merge_from_file(args.config_file)
     #cfg.merge_from_list(args.opts)
-    cfg.freeze()
+    #cfg.freeze()
     default_setup(cfg, args)
     return cfg
 
@@ -268,28 +270,29 @@ def get_coco_panoptic_standard():
 
     return meta
 
-def main(args):
-    cfg = setup(args)
+def _get_coco_instances_meta():
+    thing_ids = [k["id"] for k in COCO_CATEGORIES if k["isthing"] == 1]
+    thing_colors = [k["color"] for k in COCO_CATEGORIES if k["isthing"] == 1]
+    #assert len(thing_ids) == 80, len(thing_ids)
+    # Mapping from the incontiguous COCO category id to an id in [0, 79]
+    thing_dataset_id_to_contiguous_id = {k: i for i, k in enumerate(thing_ids)}
+    thing_classes = [k["name"] for k in COCO_CATEGORIES if k["isthing"] == 1]
+    ret = {
+        "thing_dataset_id_to_contiguous_id": thing_dataset_id_to_contiguous_id,
+        "thing_classes": thing_classes,
+        "thing_colors": thing_colors,
+    }
+    return ret
 
-    metalist=MetadataCatalog.list()
-
-    #panoptic_name="fire_panoptic"#"coco_2017_train_panoptic_separated"#"coco_2017_train_panoptic"
-    image_root='./Dataset/CMPE_295_All_images/Images'
-    panoptic_root='./Dataset/CMPE_295_All_images/train/segmentation/' #directory which contains panoptic annotation images
-    panoptic_json='./Dataset/CMPE_295_All_images/Images/FireClassification.json'
-    #sem_seg_root= '/DATA5T2/Datasets/COCO2017/coco/panoptic_stuff_train2017/'#directory which contains all the ground truth segmentation annotations.
-    instances_json='./Dataset/CMPE_295_All_images/Fire_CMPE295-16.json'
-    
-        
-    mypanoptic_name='fire_train_panoptic'
+def mypanopticdatasetregister(panoptic_name, image_root, panoptic_root, panoptic_json, instances_json, instancedataset_name="mycoco_2017_val"):
     mymeta=get_coco_panoptic_standard()#_get_coco_panoptic_separated_meta()
     print(mymeta["thing_dataset_id_to_contiguous_id"])
     #ref to register_coco_panoptic in https://github.com/facebookresearch/detectron2/blob/main/detectron2/data/datasets/coco_panoptic.py
     DatasetCatalog.register(
-        mypanoptic_name,
+        panoptic_name,
         lambda: load_coco_panoptic_json(panoptic_json, image_root, panoptic_root, mymeta),
     )
-    MetadataCatalog.get(mypanoptic_name).set(
+    MetadataCatalog.get(panoptic_name).set(
         panoptic_root=panoptic_root,
         image_root=image_root,
         panoptic_json=panoptic_json,
@@ -301,7 +304,37 @@ def main(args):
     )
 
     metalist=MetadataCatalog.list()
-    mymetadataCatalog = MetadataCatalog.get(mypanoptic_name)
+    panotic_metadata = MetadataCatalog.get(panoptic_name)
+
+    
+    register_coco_instances(instancedataset_name, _get_coco_instances_meta(), instances_json, image_root)
+    instance_metadata = MetadataCatalog.get(instancedataset_name)
+
+    return panotic_metadata, instance_metadata
+
+def main(args):
+    cfg = setup(args)
+
+    metalist=MetadataCatalog.list()
+
+    #panoptic_name="fire_panoptic"#"coco_2017_train_panoptic_separated"#"coco_2017_train_panoptic"
+    image_root='./Dataset/FireDataset/train'
+    panoptic_root='./Dataset/FireDataset/panoptic_train/' #directory which contains panoptic annotation images
+    panoptic_json='./Dataset/FireDataset/annotations/fire-net-panoptic-format-train.json'
+    #sem_seg_root= '/DATA5T2/Datasets/COCO2017/coco/panoptic_stuff_train2017/'#directory which contains all the ground truth segmentation annotations.
+    instances_json='./Dataset/FireDataset/annotations/fire-net-instances-format-train.json'
+
+    mypanoptic_name='fire_train_panoptic'
+    mymetadataCatalog, instance_train_meta=mypanopticdatasetregister(mypanoptic_name, image_root, panoptic_root, panoptic_json, instances_json, instancedataset_name="fire_train")
+    
+    valimage_root='./Dataset/FireDataset/val'
+    valpanoptic_root='./Dataset/FireDataset/panoptic_val/' #directory which contains panoptic annotation images
+    valpanoptic_json='./Dataset/FireDataset/annotations/fire-net-panoptic-format-val.json'
+    #sem_seg_root= '/DATA5T2/Datasets/COCO2017/coco/panoptic_stuff_train2017/'#directory which contains all the ground truth segmentation annotations.
+    valinstances_json='./Dataset/FireDataset/annotations/fire-net-instances-format-val.json'
+    myvalpanoptic_name='fire_val_panoptic'
+    myvalmetadataCatalog, instance_train_meta=mypanopticdatasetregister(myvalpanoptic_name, valimage_root, valpanoptic_root, valpanoptic_json, valinstances_json, instancedataset_name="fire_val")
+    
 
     #Visualize a few images
     dataset_dicts = DatasetCatalog.get(mypanoptic_name)
@@ -311,6 +344,9 @@ def main(args):
         vis = visualizer.draw_dataset_dict(d)
         cv2_imshow(vis.get_image()[:, :, ::-1],'./outputs/panopticdeeplab'+str(d["image_id"]))
 
+    cfg.MODEL.WEIGHTS = './outputs/panoticdeeplab_model_final.pkl'
+    cfg.OUTPUT_DIR='./output/firepanopticdeeplab'
+    os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
     if args.eval_only:
         model = Trainer.build_model(cfg)
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
@@ -319,8 +355,6 @@ def main(args):
         res = Trainer.test(cfg, model)
         return res
 
-    #cfg.OUTPUT_DIR='./output/cocopanopticdeeplab'
-    #os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
     trainer = Trainer(cfg)
     trainer.resume_or_load(resume=args.resume)
     return trainer.train()
@@ -345,7 +379,8 @@ if __name__ == "__main__":
 
     print(args)
     #args.config_file="/Panoptic-DeepLab/configs/COCO-PanopticSegmentation/panoptic_deeplab_R_52_os16_mg124_poly_200k_bs64_crop_640_640_coco_dsconv.yaml"
-    args.config_file="./Panoptic-DeepLab/configs/COCO-PanopticSegmentation/panoptic_deeplab_R_52_os16_mg124_poly_200k_bs64_crop_640_640_coco_dsconv.yaml"
+    # args.config_file="./Panoptic-DeepLab/configs/COCO-PanopticSegmentation/panoptic_deeplab_R_52_os16_mg124_poly_200k_bs64_crop_640_640_coco_dsconv.yaml"
+    args.config_file="./Panoptic-DeepLab/configs/COCO-PanopticSegmentation/firepanoptic_deeplab.yaml"
     print("Command Line Args:", args)
 
     # import torch.distributed as dist
