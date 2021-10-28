@@ -329,7 +329,7 @@ def main(args):
     
     valimage_root='./Dataset/FireDataset/val'
     valpanoptic_root='./Dataset/FireDataset/panoptic_val/' #directory which contains panoptic annotation images
-    valpanoptic_json='./Dataset/FireDataset/annotations/fire-net-panoptic-format-val.json'
+    valpanoptic_json='./Dataset/FireDataset/annotations/fire-net-panoptic-format-val-correct.json'
     #sem_seg_root= '/DATA5T2/Datasets/COCO2017/coco/panoptic_stuff_train2017/'#directory which contains all the ground truth segmentation annotations.
     valinstances_json='./Dataset/FireDataset/annotations/fire-net-instances-format-val.json'
     myvalpanoptic_name='fire_val_panoptic'
@@ -344,9 +344,11 @@ def main(args):
         vis = visualizer.draw_dataset_dict(d)
         cv2_imshow(vis.get_image()[:, :, ::-1],'./outputs/panopticdeeplab'+str(d["image_id"]))
 
-    cfg.MODEL.WEIGHTS = './outputs/panoticdeeplab_model_final.pkl'
+    #cfg.MODEL.WEIGHTS = './outputs/panoticdeeplab_model_final.pkl'
+    cfg.MODEL.WEIGHTS = './output/firepanopticdeeplab/model_final.pth'
     cfg.OUTPUT_DIR='./output/firepanopticdeeplab'
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
+    args.eval_only = True
     if args.eval_only:
         model = Trainer.build_model(cfg)
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
